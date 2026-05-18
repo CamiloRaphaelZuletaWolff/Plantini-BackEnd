@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { ForbiddenException, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Content, GoogleGenAI } from '@google/genai';
 
@@ -50,8 +50,13 @@ export class GeminiService {
     }
   }
 
-  async chatStream(chatPromptDto: ChatPromptDto) {
-    const chatHistory = await this.getChatHistory(chatPromptDto.chatId);
+  async chatStream(chatPromptDto: ChatPromptDto, userId: string) {
+    await this.assertChatAccess(chatPromptDto.chatId, userId);
+
+    const chatHistory = await this.getChatHistory(
+      chatPromptDto.chatId,
+      userId,
+    );
     try {
       return await chatPromptStreamUseCase(this.ai, chatPromptDto, {
         history: chatHistory,
@@ -65,10 +70,12 @@ export class GeminiService {
     }
   }
 
-  async getChatHistory(chatId: string): Promise<Content[]> {
-    this.logger.debug(`Obteniendo historial para el chat ${chatId}`);
+  async getChatHistory(chatId: string, userId: string): Promise<Content[]> {
+    this.logger.debug(
+      `Obteniendo historial para el chat ${chatId} (user ${userId})`,
+    );
     try {
-      return await this.chatHistoryRepository.findByChatId(chatId);
+      return await this.chatHistoryRepository.findByChatId(chatId, userId);
     } catch (error) {
       this.logger.error(
         `No se pudo cargar el historial del chat ${chatId}`,
@@ -79,20 +86,31 @@ export class GeminiService {
   }
 
   /**
-   * Appends one or more messages to the chat history atomically
-   * (single read + single write to Supabase).
+   * Appends one or more messages to the chat history. Requires `userId` to
+   * enforce ownership — refuses to write if the chatId already belongs to
+   * another user (prevents hijack via guessed chat_id).
    */
-  async saveMessages(chatId: string, newMessages: Content[]): Promise<void> {
+  async saveMessages(
+    chatId: string,
+    userId: string,
+    newMessages: Content[],
+  ): Promise<void> {
     this.logger.debug(
-      `Guardando ${newMessages.length} mensaje(s) para el chat ${chatId}`,
+      `Guardando ${newMessages.length} mensaje(s) para el chat ${chatId} (user ${userId})`,
     );
     try {
-      const history = await this.chatHistoryRepository.findByChatId(chatId);
-      await this.chatHistoryRepository.save(chatId, [
+      await this.assertChatAccess(chatId, userId);
+      const history = await this.chatHistoryRepository.findByChatId(
+        chatId,
+        userId,
+      );
+      await this.chatHistoryRepository.save(chatId, userId, [
         ...history,
         ...newMessages,
       ]);
     } catch (error) {
+      // Re-throw authorization errors so the caller surfaces a 403.
+      if (error instanceof ForbiddenException) throw error;
       this.logger.error(
         `No se pudo persistir el historial del chat ${chatId}`,
         error instanceof Error ? error.stack : String(error),
@@ -100,11 +118,15 @@ export class GeminiService {
     }
   }
 
-  async clearChatHistory(chatId: string): Promise<void> {
-    this.logger.log(`Limpiando historial para el chat ${chatId}`);
+  async clearChatHistory(chatId: string, userId: string): Promise<void> {
+    this.logger.log(
+      `Limpiando historial para el chat ${chatId} (user ${userId})`,
+    );
     try {
-      await this.chatHistoryRepository.clear(chatId);
+      await this.assertChatAccess(chatId, userId);
+      await this.chatHistoryRepository.clear(chatId, userId);
     } catch (error) {
+      if (error instanceof ForbiddenException) throw error;
       this.logger.error(
         `No se pudo limpiar el historial del chat ${chatId}`,
         error instanceof Error ? error.stack : String(error),
@@ -124,6 +146,26 @@ export class GeminiService {
         error instanceof Error ? error.stack : String(error),
       );
       throw error;
+    }
+  }
+
+  /**
+   * Throws ForbiddenException if `userId` does not own `chatId`. New chats
+   * (no row yet) are allowed — the calling user claims them on first write.
+   */
+  private async assertChatAccess(
+    chatId: string,
+    userId: string,
+  ): Promise<void> {
+    const ownership = await this.chatHistoryRepository.checkOwnership(
+      chatId,
+      userId,
+    );
+    if (ownership === 'forbidden') {
+      this.logger.warn(
+        `Usuario ${userId} intentó acceder al chat ${chatId} sin permiso`,
+      );
+      throw new ForbiddenException('No tienes acceso a este chat');
     }
   }
 }

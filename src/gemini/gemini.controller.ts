@@ -9,6 +9,7 @@ import {
   Logger,
   Param,
   Post,
+  Req,
   Res,
   UploadedFiles,
   UseGuards,
@@ -16,7 +17,8 @@ import {
 } from '@nestjs/common';
 import { FilesInterceptor } from '@nestjs/platform-express';
 
-import { Response } from 'express';
+import { Request, Response } from 'express';
+import type { User } from '@supabase/supabase-js';
 
 // Ensures Express.Multer namespace augmentation is loaded by TypeScript
 import 'multer';
@@ -27,6 +29,12 @@ import { ChatPromptDto } from './dtos/chat-prompt.dto';
 import { GenerateContentResponse } from '@google/genai';
 import { ImageGenerationDto } from './dtos/image-generation.dto';
 import { AuthGuard } from '../auth/auth.guard';
+
+/**
+ * Request with the user attached by AuthGuard.
+ * @see AuthGuard.canActivate which sets `request.user`.
+ */
+type AuthenticatedRequest = Request & { user: User };
 
 @UseGuards(AuthGuard)
 @Controller('gemini')
@@ -98,15 +106,22 @@ export class GeminiController {
     @Body() chatPromptDto: ChatPromptDto,
     @Res() res: Response,
     @UploadedFiles() files: Array<Express.Multer.File>,
+    @Req() request: AuthenticatedRequest,
   ) {
     chatPromptDto.files = files;
+    const userId = request.user.id;
 
     try {
-      const stream = await this.geminiService.chatStream(chatPromptDto);
+      const stream = await this.geminiService.chatStream(
+        chatPromptDto,
+        userId,
+      );
       const data = await this.outputStreamResponse(res, stream);
 
-      // Save both messages in a single Supabase write
-      await this.geminiService.saveMessages(chatPromptDto.chatId, [
+      // Save both messages in a single Supabase write — scoped to the
+      // authenticated user so a guessed chatId cannot hijack another user's
+      // history.
+      await this.geminiService.saveMessages(chatPromptDto.chatId, userId, [
         { role: 'user', parts: [{ text: chatPromptDto.prompt }] },
         { role: 'model', parts: [{ text: data }] },
       ]);
@@ -120,8 +135,16 @@ export class GeminiController {
   }
 
   @Get('chat-history/:chatId')
-  async getChatHistory(@Param('chatId') chatId: string) {
-    const history = await this.geminiService.getChatHistory(chatId);
+  async getChatHistory(
+    @Param('chatId') chatId: string,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    // findByChatId filters by (chat_id, user_id) — returns [] for chats not
+    // owned by the caller without revealing whether they exist.
+    const history = await this.geminiService.getChatHistory(
+      chatId,
+      request.user.id,
+    );
 
     return history.map((message) => ({
       role: message.role,
@@ -130,9 +153,12 @@ export class GeminiController {
   }
 
   @Delete('chat-history/:chatId')
-  async clearChatHistory(@Param('chatId') chatId: string) {
+  async clearChatHistory(
+    @Param('chatId') chatId: string,
+    @Req() request: AuthenticatedRequest,
+  ) {
     try {
-      await this.geminiService.clearChatHistory(chatId);
+      await this.geminiService.clearChatHistory(chatId, request.user.id);
       return { chatId, cleared: true };
     } catch (error) {
       this.handleError(error, 'No se pudo limpiar el historial del chat');
