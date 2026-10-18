@@ -1,0 +1,62 @@
+# ---------------------------------------------------------------------------
+# Render Blueprint — Plantini backend (NestJS) on the FREE plan.
+#
+# How to use: Render Dashboard → New → Blueprint → pick this repository.
+# Render reads this file, creates the service and asks you for every env var
+# marked `sync: false` (secrets are never committed). Full step-by-step guide
+# in DEPLOY.md (Spanish).
+#
+# Free-plan facts worth knowing:
+#   - 512 MB RAM, shared CPU.
+#   - The instance sleeps after 15 min without traffic; the next request
+#     wakes it up (cold start ~30–60 s). The frontend shows a friendly
+#     "waking up the server" message while that happens.
+#   - 750 free instance-hours per month PER WORKSPACE (shared by all free
+#     services you have in the same workspace).
+#   - No shell / no one-off jobs: run the DB seed from GitHub Actions instead
+#     (.github/workflows/seed.yml).
+# ---------------------------------------------------------------------------
+services:
+  - type: web
+    name: plantini-backend
+    runtime: node
+    plan: free
+    region: oregon
+    branch: main
+    # Redeploy automatically on every push to `main`.
+    autoDeploy: true
+
+    # `--include=dev` guarantees the Nest CLI and TypeScript (devDependencies)
+    # are installed even though NODE_ENV=production is set below — they are
+    # needed by `npm run build`. The compiled app ends up in dist/main.js.
+    buildCommand: npm ci --include=dev && npm run build
+    startCommand: npm run start:prod
+
+    # Global prefix is /api, so the health endpoint lives at /api/health.
+    # Render waits for it to answer 2xx before switching traffic to a new deploy.
+    healthCheckPath: /api/health
+
+    envVars:
+      # Node major version (also pinned in package.json "engines").
+      - key: NODE_VERSION
+        value: "22"
+      - key: NODE_ENV
+        value: production
+
+      # PORT is injected by Render automatically (10000); the app reads it.
+
+      # --- Secrets: Render prompts for these when the Blueprint is created ---
+      # Google AI Studio API key (https://aistudio.google.com/apikey).
+      - key: GEMINI_API_KEY
+        sync: false
+      # Supabase → Project Settings → Data API / API → Project URL.
+      - key: SUPABASE_URL
+        sync: false
+      # Supabase → Project Settings → API Keys → service_role (secret!).
+      # Server-side only: NEVER put this key in the frontend.
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      # Comma-separated list of allowed browser origins, exact match, no
+      # trailing slash. Example: https://voluntariado-upb.vercel.app
+      - key: CORS_ORIGINS
+        sync: false

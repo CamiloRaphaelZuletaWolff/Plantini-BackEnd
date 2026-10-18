@@ -28,7 +28,7 @@ const buildSupabase = (
   };
   builder.eq = jest.fn().mockImplementation((col: string, val: unknown) => {
     eqCalls.push([col, val]);
-    return { ...builder, ...deletePromise };
+    return { ...builder, then: deletePromise.then };
   });
 
   const client = {
@@ -50,7 +50,10 @@ describe('ChatHistoryRepository', () => {
     it('filters by both chat_id and user_id', async () => {
       const eqCalls: Array<[string, unknown]> = [];
       const { service } = buildSupabase(
-        { data: { messages: [{ role: 'user', parts: [{ text: 'hi' }] }] }, error: null },
+        {
+          data: { messages: [{ role: 'user', parts: [{ text: 'hi' }] }] },
+          error: null,
+        },
         eqCalls,
       );
       const repo = new ChatHistoryRepository(service);

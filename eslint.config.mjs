@@ -33,4 +33,12 @@ export default tseslint.config(
       '@typescript-eslint/no-unsafe-argument': 'warn'
     },
   },
+  {
+    // Jest assertions such as `expect(mock.method).toHaveBeenCalled()` reference
+    // methods without calling them; that is safe for jest.fn() mocks.
+    files: ['**/*.spec.ts'],
+    rules: {
+      '@typescript-eslint/unbound-method': 'off',
+    },
+  },
 );

@@ -5,7 +5,9 @@ import { BadRequestException, Logger } from '@nestjs/common';
 import { GoogleGenAI } from '@google/genai';
 import sharp from 'sharp';
 
-const fileMimeTypesByExtension = {
+import { MAX_UPLOAD_FILE_BYTES } from './upload-limits';
+
+const fileMimeTypesByExtension: Record<string, string> = {
   jpg: 'image/jpg',
   jpeg: 'image/jpeg',
   png: 'image/png',
@@ -25,7 +27,8 @@ interface UploadFileOptions {
   maxFileSizeBytes?: number;
 }
 
-const DEFAULT_MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024;
+// Same per-file cap that Multer enforces at the HTTP boundary.
+const DEFAULT_MAX_FILE_SIZE_BYTES = MAX_UPLOAD_FILE_BYTES;
 const allowedMimeTypes = new Set(Object.values(fileMimeTypesByExtension));
 const logger = new Logger('GeminiUploadFile');
 
@@ -96,7 +99,7 @@ export const geminiUploadFiles = async (
               type: 'image/png',
             }),
           });
-        } catch (error) {
+        } catch {
           logger.warn(
             `No se pudo procesar el archivo para transformarlo a PNG: ${file.originalname}`,
           );

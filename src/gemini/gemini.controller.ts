@@ -26,9 +26,9 @@ import 'multer';
 import { GeminiService } from './gemini.service';
 import { BasicPromptDto } from './dtos/basic-prompt.dto';
 import { ChatPromptDto } from './dtos/chat-prompt.dto';
-import { GenerateContentResponse } from '@google/genai';
 import { ImageGenerationDto } from './dtos/image-generation.dto';
 import { AuthGuard } from '../auth/auth.guard';
+import { MAX_UPLOAD_FILES, uploadOptions } from './helpers/upload-limits';
 
 /**
  * Request with the user attached by AuthGuard.
@@ -45,22 +45,31 @@ export class GeminiController {
 
   private async outputStreamResponse(
     res: Response,
-    stream: AsyncGenerator<GenerateContentResponse, any, any>,
+    stream: AsyncGenerator<string>,
   ) {
     res.setHeader('Content-Type', 'text/plain');
     res.status(HttpStatus.OK);
 
     let resultText = '';
+    let chunkCount = 0;
     try {
-      for await (const chunk of stream) {
-        const piece = chunk.text;
+      for await (const piece of stream) {
+        if (!piece) continue;
+        chunkCount += 1;
         resultText += piece;
         res.write(piece);
       }
 
+      this.logger.log(
+        `Stream completed: ${chunkCount} chunks, ${resultText.length} chars`,
+      );
       res.end();
       return resultText;
     } catch (error) {
+      this.logger.error(
+        `Stream aborted after ${chunkCount} chunks / ${resultText.length} chars`,
+        error instanceof Error ? error.stack : String(error),
+      );
       this.handleStreamError(
         res,
         error,
@@ -70,17 +79,27 @@ export class GeminiController {
     }
   }
 
+  // The frontend sends multipart/form-data (prompt + optional files[]) and
+  // reads the reply with `res.json()`, so parse multipart here and wrap the
+  // text in a JSON object (same `{ text }` shape as the Express backend).
   @Post('basic-prompt')
-  async basicPrompt(@Body() basicPromptDto: BasicPromptDto) {
+  @UseInterceptors(FilesInterceptor('files', MAX_UPLOAD_FILES, uploadOptions))
+  async basicPrompt(
+    @Body() basicPromptDto: BasicPromptDto,
+    @UploadedFiles() files: Array<Express.Multer.File>,
+  ) {
+    basicPromptDto.files = files;
+
     try {
-      return await this.geminiService.basicPrompt(basicPromptDto);
+      const text = await this.geminiService.basicPrompt(basicPromptDto);
+      return { text };
     } catch (error) {
       this.handleError(error, 'No se pudo completar el prompt básico');
     }
   }
 
   @Post('basic-prompt-stream')
-  @UseInterceptors(FilesInterceptor('files'))
+  @UseInterceptors(FilesInterceptor('files', MAX_UPLOAD_FILES, uploadOptions))
   async basicPromptStream(
     @Body() basicPromptDto: BasicPromptDto,
     @Res() res: Response,
@@ -101,7 +120,7 @@ export class GeminiController {
   }
 
   @Post('chat-stream')
-  @UseInterceptors(FilesInterceptor('files'))
+  @UseInterceptors(FilesInterceptor('files', MAX_UPLOAD_FILES, uploadOptions))
   async chatStream(
     @Body() chatPromptDto: ChatPromptDto,
     @Res() res: Response,
@@ -111,20 +130,28 @@ export class GeminiController {
     chatPromptDto.files = files;
     const userId = request.user.id;
 
+    this.logger.log(
+      `chat-stream user=${userId} chatId=${chatPromptDto.chatId} ` +
+        `promptLen=${chatPromptDto.prompt?.length ?? 0} files=${files?.length ?? 0}`,
+    );
+
     try {
-      const stream = await this.geminiService.chatStream(
-        chatPromptDto,
-        userId,
-      );
+      const stream = await this.geminiService.chatStream(chatPromptDto, userId);
       const data = await this.outputStreamResponse(res, stream);
 
-      // Save both messages in a single Supabase write — scoped to the
-      // authenticated user so a guessed chatId cannot hijack another user's
-      // history.
-      await this.geminiService.saveMessages(chatPromptDto.chatId, userId, [
-        { role: 'user', parts: [{ text: chatPromptDto.prompt }] },
-        { role: 'model', parts: [{ text: data }] },
-      ]);
+      // Only persist when the model actually produced text. Saving an empty
+      // model turn corrupts the next request — Gemini rejects history that
+      // contains empty parts with "exception parsing response".
+      if (data.trim().length > 0) {
+        await this.geminiService.saveMessages(chatPromptDto.chatId, userId, [
+          { role: 'user', parts: [{ text: chatPromptDto.prompt }] },
+          { role: 'model', parts: [{ text: data }] },
+        ]);
+      } else {
+        this.logger.warn(
+          `Skipped save for chat ${chatPromptDto.chatId}: model returned 0 chars`,
+        );
+      }
     } catch (error) {
       this.handleStreamError(
         res,
@@ -166,7 +193,7 @@ export class GeminiController {
   }
 
   @Post('image-generation')
-  @UseInterceptors(FilesInterceptor('files'))
+  @UseInterceptors(FilesInterceptor('files', MAX_UPLOAD_FILES, uploadOptions))
   async imageGeneration(
     @Body() imageGenerationDto: ImageGenerationDto,
     @UploadedFiles() files: Array<Express.Multer.File>,

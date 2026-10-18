@@ -4,6 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import { GeminiService } from './gemini.service';
 import { ChatHistoryRepository } from './repositories/chat-history.repository';
 import { SupabaseService } from '../supabase/supabase.service';
+import { StoredMessage } from './types/interaction-input';
 
 const CHAT_ID = '11111111-1111-1111-1111-111111111111';
 const USER_A = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
@@ -31,9 +32,9 @@ describe('GeminiService — chat authorization', () => {
   describe('getChatHistory', () => {
     it('forwards (chatId, userId) to the repository', async () => {
       const { service, repo } = buildService({
-        findByChatId: jest.fn().mockResolvedValue([
-          { role: 'user', parts: [{ text: 'hola' }] },
-        ]),
+        findByChatId: jest
+          .fn()
+          .mockResolvedValue([{ role: 'user', parts: [{ text: 'hola' }] }]),
       });
 
       const result = await service.getChatHistory(CHAT_ID, USER_A);
@@ -66,7 +67,7 @@ describe('GeminiService — chat authorization', () => {
         findByChatId: jest.fn().mockResolvedValue(existing),
       });
 
-      const newMsg = { role: 'model', parts: [{ text: 'new' }] };
+      const newMsg: StoredMessage = { role: 'model', parts: [{ text: 'new' }] };
       await service.saveMessages(CHAT_ID, USER_A, [newMsg]);
 
       expect(repo.save).toHaveBeenCalledWith(CHAT_ID, USER_A, [
@@ -81,7 +82,7 @@ describe('GeminiService — chat authorization', () => {
         findByChatId: jest.fn().mockResolvedValue([]),
       });
 
-      const msg = { role: 'user', parts: [{ text: 'first' }] };
+      const msg: StoredMessage = { role: 'user', parts: [{ text: 'first' }] };
       await service.saveMessages(CHAT_ID, USER_A, [msg]);
 
       expect(repo.save).toHaveBeenCalledWith(CHAT_ID, USER_A, [msg]);

@@ -1,7 +1,8 @@
 import { ForbiddenException, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { Content, GoogleGenAI } from '@google/genai';
+import { GoogleGenAI } from '@google/genai';
 
+import { StoredMessage } from './types/interaction-input';
 import { BasicPromptDto } from './dtos/basic-prompt.dto';
 import { basicPromptUseCase } from './use-cases/basic-prompt.use-case';
 import { basicPromptStreamUseCase } from './use-cases/basic-prompt-stream.use-case';
@@ -53,10 +54,7 @@ export class GeminiService {
   async chatStream(chatPromptDto: ChatPromptDto, userId: string) {
     await this.assertChatAccess(chatPromptDto.chatId, userId);
 
-    const chatHistory = await this.getChatHistory(
-      chatPromptDto.chatId,
-      userId,
-    );
+    const chatHistory = await this.getChatHistory(chatPromptDto.chatId, userId);
     try {
       return await chatPromptStreamUseCase(this.ai, chatPromptDto, {
         history: chatHistory,
@@ -70,7 +68,10 @@ export class GeminiService {
     }
   }
 
-  async getChatHistory(chatId: string, userId: string): Promise<Content[]> {
+  async getChatHistory(
+    chatId: string,
+    userId: string,
+  ): Promise<StoredMessage[]> {
     this.logger.debug(
       `Obteniendo historial para el chat ${chatId} (user ${userId})`,
     );
@@ -93,7 +94,7 @@ export class GeminiService {
   async saveMessages(
     chatId: string,
     userId: string,
-    newMessages: Content[],
+    newMessages: StoredMessage[],
   ): Promise<void> {
     this.logger.debug(
       `Guardando ${newMessages.length} mensaje(s) para el chat ${chatId} (user ${userId})`,

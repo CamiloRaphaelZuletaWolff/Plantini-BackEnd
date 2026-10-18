@@ -1,0 +1,67 @@
+# Seeds the Supabase database with the demo users / oportunidades /
+# postulaciones defined in seed.ts.
+#
+# Render's free plan has no shell, so this manual workflow is the "no-shell"
+# way to run one-off operations. It uses two repository secrets:
+#   Settings → Secrets and variables → Actions → New repository secret
+#     SUPABASE_URL                (https://<project-ref>.supabase.co)
+#     SUPABASE_SERVICE_ROLE_KEY   (service_role key — bypasses RLS)
+#
+# seed.ts is idempotent (upserts), but it DOES overwrite the demo rows, so the
+# run requires typing SEED in the confirmation box.
+name: Seed Supabase (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Escribe SEED para confirmar que quieres sembrar la base de datos'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+# Never run two seeds at the same time.
+concurrency:
+  group: seed-supabase
+  cancel-in-progress: false
+
+jobs:
+  seed:
+    name: Run seed.ts
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check confirmation
+        if: ${{ inputs.confirm != 'SEED' }}
+        run: |
+          echo "::error::Confirmación inválida. Escribe exactamente SEED para ejecutar el seed."
+          exit 1
+
+      - name: Check secrets
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_SERVICE_ROLE_KEY" ]; then
+            echo "::error::Faltan los secrets SUPABASE_URL y/o SUPABASE_SERVICE_ROLE_KEY en el repositorio."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Seed database
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: npm run seed

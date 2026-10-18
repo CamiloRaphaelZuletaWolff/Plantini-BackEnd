@@ -459,7 +459,8 @@ CREATE TRIGGER trg_postulaciones_cupos
 -- 10. TRIGGER: auto-create user profile on signup
 -- ============================================================
 CREATE OR REPLACE FUNCTION public.handle_new_user()
-RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER AS $$
+RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = public AS $$
 BEGIN
   INSERT INTO public.users (id, nombre, email)
   VALUES (

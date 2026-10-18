@@ -1,11 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { Content } from '@google/genai';
 import { SupabaseService } from '../../supabase/supabase.service';
+import { StoredMessage } from '../types/interaction-input';
 
 interface ChatHistoryRow {
   chat_id: string;
   user_id: string;
-  messages: Content[];
+  messages: StoredMessage[];
   updated_at: string;
 }
 
@@ -30,7 +30,7 @@ export class ChatHistoryRepository {
    * not exist OR is owned by a different user — both cases are
    * indistinguishable to the caller, which prevents existence-leak.
    */
-  async findByChatId(chatId: string, userId: string): Promise<Content[]> {
+  async findByChatId(chatId: string, userId: string): Promise<StoredMessage[]> {
     const { data, error } = (await this.supabaseService.client
       .from('chat_histories')
       .select('messages')
@@ -87,7 +87,7 @@ export class ChatHistoryRepository {
   async save(
     chatId: string,
     userId: string,
-    messages: Content[],
+    messages: StoredMessage[],
   ): Promise<void> {
     const row: ChatHistoryRow = {
       chat_id: chatId,
