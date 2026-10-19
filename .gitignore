@@ -57,3 +57,21 @@ pids
 
 # Diagnostic reports (https://nodejs.org/api/report.html)
 report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
+
+# Variables de entorno: solo se publica .env.example
+.env.*
+!.env.example
+
+# Llaves y certificados
+*.pem
+*.key
+*.p12
+
+# Herramientas de IA / agentes y grafo generado (no son parte del producto)
+.claude/
+.agents/
+skills-lock.json
+graphify-out/
+
+# Deploy local
+.vercel/
