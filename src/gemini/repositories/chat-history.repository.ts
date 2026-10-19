@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { ForbiddenException, Injectable, Logger } from '@nestjs/common';
 import { SupabaseService } from '../../supabase/supabase.service';
 import { StoredMessage } from '../types/interaction-input';
 
@@ -8,6 +8,9 @@ interface ChatHistoryRow {
   messages: StoredMessage[];
   updated_at: string;
 }
+
+/** Postgres error code for a primary-key / unique constraint violation. */
+const UNIQUE_VIOLATION = '23505';
 
 export type Ownership = 'owned' | 'new' | 'forbidden';
 
@@ -84,30 +87,69 @@ export class ChatHistoryRepository {
     return data.user_id === userId ? 'owned' : 'forbidden';
   }
 
+  /**
+   * Persists `messages` for (chatId, userId) WITHOUT ever touching a row
+   * owned by someone else:
+   *   1. UPDATE ... WHERE chat_id = ? AND user_id = ?  (the caller's own row)
+   *   2. if nothing was updated, INSERT a new row (claims the chat). The
+   *      chat_id primary key makes a concurrent/stolen claim fail with
+   *      23505 instead of overwriting the other user's history.
+   *
+   * A plain `upsert(onConflict: chat_id)` would rewrite `user_id` and hand
+   * the history to whoever guessed the chat_id, so it is intentionally not
+   * used here.
+   */
   async save(
     chatId: string,
     userId: string,
     messages: StoredMessage[],
   ): Promise<void> {
+    const updatedAt = new Date().toISOString();
+
+    const { data: updated, error: updateError } =
+      (await this.supabaseService.client
+        .from('chat_histories')
+        .update({ messages, updated_at: updatedAt } as never)
+        .eq('chat_id', chatId)
+        .eq('user_id', userId)
+        .select('chat_id')) as {
+        data: Pick<ChatHistoryRow, 'chat_id'>[] | null;
+        error: Error | null;
+      };
+
+    if (updateError) {
+      this.logger.error(
+        `Error saving chat history for ${chatId}`,
+        updateError.message,
+      );
+      throw updateError;
+    }
+
+    if (updated && updated.length > 0) return;
+
     const row: ChatHistoryRow = {
       chat_id: chatId,
       user_id: userId,
       messages,
-      updated_at: new Date().toISOString(),
+      updated_at: updatedAt,
     };
 
-    const { error } = await (this.supabaseService.client
+    const { error: insertError } = (await this.supabaseService.client
       .from('chat_histories')
-      .upsert(row as never, { onConflict: 'chat_id' }) as unknown as Promise<{
-      error: Error | null;
-    }>);
+      .insert(row as never)) as {
+      error: (Error & { code?: string }) | null;
+    };
 
-    if (error) {
+    if (insertError) {
+      if (insertError.code === UNIQUE_VIOLATION) {
+        // The chat_id exists but is not ours (or was claimed concurrently).
+        throw new ForbiddenException('No tienes acceso a este chat');
+      }
       this.logger.error(
         `Error saving chat history for ${chatId}`,
-        error.message,
+        insertError.message,
       );
-      throw error;
+      throw insertError;
     }
   }
 

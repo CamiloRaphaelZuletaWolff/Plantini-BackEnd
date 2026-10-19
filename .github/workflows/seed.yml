@@ -6,6 +6,11 @@
 #   Settings → Secrets and variables → Actions → New repository secret
 #     SUPABASE_URL                (https://<project-ref>.supabase.co)
 #     SUPABASE_SERVICE_ROLE_KEY   (service_role key — bypasses RLS)
+#     SEED_ADMIN_PASSWORD         (admin demo password, >= 12 chars, never publish it)
+#     SEED_ORGANIZER_PASSWORD     (organizer demo password, >= 12 chars, never publish it)
+#     SEED_STUDENT_PASSWORD       (optional; public student demo, default Password123!)
+# If the two privileged passwords are missing, seed.ts sets random ones and
+# never prints them. seed.ts never logs passwords (Actions logs are public).
 #
 # seed.ts is idempotent (upserts), but it DOES overwrite the demo rows, so the
 # run requires typing SEED in the confirmation box.
@@ -64,4 +69,7 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SEED_ADMIN_PASSWORD: ${{ secrets.SEED_ADMIN_PASSWORD }}
+          SEED_ORGANIZER_PASSWORD: ${{ secrets.SEED_ORGANIZER_PASSWORD }}
+          SEED_STUDENT_PASSWORD: ${{ secrets.SEED_STUDENT_PASSWORD }}
         run: npm run seed

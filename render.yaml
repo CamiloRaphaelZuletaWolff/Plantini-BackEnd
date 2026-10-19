@@ -60,3 +60,7 @@ services:
       # trailing slash. Example: https://voluntariado-upb.vercel.app
       - key: CORS_ORIGINS
         sync: false
+
+      # Optional, intentionally NOT defined: setting ENABLE_IMAGE_GENERATION=true
+      # turns on POST /api/gemini/image-generation (most expensive endpoint,
+      # unused by the app; throttled to 3 req/min per IP when enabled).

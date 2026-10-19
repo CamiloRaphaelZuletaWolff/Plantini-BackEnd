@@ -7,6 +7,15 @@
  * Requirements:
  *   - gemini-backend/.env must contain SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY
  *
+ * Demo passwords (never commit them, never publish the admin/organizer ones):
+ *   - SEED_ADMIN_PASSWORD / SEED_ORGANIZER_PASSWORD: privileged accounts. If
+ *     unset, a random password is generated and NOT printed (reset it from
+ *     the Supabase dashboard if you need to log in). If set, existing users
+ *     get their password reset to this value, so re-running the seed rotates
+ *     a leaked password. Minimum 12 characters.
+ *   - SEED_STUDENT_PASSWORD: the public demo account (a plain student, which
+ *     RLS confines to its own data). Defaults to Password123!.
+ *
  * This script is idempotent — safe to run multiple times.
  * Auth users are created via the Admin API (the only correct way to seed
  * Supabase auth users; direct auth.users SQL inserts are unreliable because
@@ -14,6 +23,7 @@
  */
 
 import { createClient } from '@supabase/supabase-js';
+import { randomBytes } from 'crypto';
 import * as dotenv from 'dotenv';
 import * as path from 'path';
 
@@ -23,7 +33,9 @@ const SUPABASE_URL = process.env.SUPABASE_URL;
 const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 if (!SUPABASE_URL || !SERVICE_ROLE_KEY) {
-  console.error('❌  Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY in .env');
+  console.error(
+    '❌  Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY in .env',
+  );
   process.exit(1);
 }
 
@@ -32,13 +44,46 @@ const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
   auth: { autoRefreshToken: false, persistSession: false },
 });
 
+// ─── Demo passwords ───────────────────────────────────────────────────────────
+
+const MIN_PRIVILEGED_PASSWORD_LENGTH = 12;
+
+interface SeedPassword {
+  value: string;
+  /** true when it came from the environment (safe to reset existing users). */
+  fromEnv: boolean;
+}
+
+function privilegedPassword(envVar: string): SeedPassword {
+  const value = process.env[envVar];
+  if (value) {
+    if (value.length < MIN_PRIVILEGED_PASSWORD_LENGTH) {
+      console.error(
+        `❌  ${envVar} must be at least ${MIN_PRIVILEGED_PASSWORD_LENGTH} characters`,
+      );
+      process.exit(1);
+    }
+    return { value, fromEnv: true };
+  }
+  // Random and never logged: the account exists but nobody knows the
+  // password until it is reset from the Supabase dashboard.
+  return { value: randomBytes(24).toString('base64url'), fromEnv: false };
+}
+
+const ADMIN_PASSWORD = privilegedPassword('SEED_ADMIN_PASSWORD');
+const ORGANIZER_PASSWORD = privilegedPassword('SEED_ORGANIZER_PASSWORD');
+const STUDENT_PASSWORD: SeedPassword = {
+  value: process.env.SEED_STUDENT_PASSWORD || 'Password123!',
+  fromEnv: true,
+};
+
 // ─── Seed definitions ─────────────────────────────────────────────────────────
 
 const USERS = [
   {
     id: 'aaaaaaaa-0000-0000-0000-000000000001',
     email: 'admin@upb.edu.bo',
-    password: 'Password123!',
+    password: ADMIN_PASSWORD,
     nombre: 'Carlos Mendoza',
     role: 'admin',
     campus: 'La Paz',
@@ -52,7 +97,7 @@ const USERS = [
   {
     id: 'bbbbbbbb-0000-0000-0000-000000000002',
     email: 'organizador@upb.edu.bo',
-    password: 'Password123!',
+    password: ORGANIZER_PASSWORD,
     nombre: 'Laura Sánchez',
     role: 'organizer',
     campus: 'Cochabamba',
@@ -66,7 +111,7 @@ const USERS = [
   {
     id: 'cccccccc-0000-0000-0000-000000000003',
     email: 'estudiante@upb.edu.bo',
-    password: 'Password123!',
+    password: STUDENT_PASSWORD,
     nombre: 'Miguel Torres',
     role: 'student',
     campus: 'La Paz',
@@ -123,8 +168,16 @@ const OPORTUNIDADES = [
     deadline: daysFromNow(30),
     cupos: 20,
     cupos_disponibles: 20,
-    ubicacion: { lat: -16.51, lng: -68.12, direccion: 'Parque Laikakota, La Paz' },
-    habilidades: ['trabajo en equipo', 'educación ambiental', 'resistencia física'],
+    ubicacion: {
+      lat: -16.51,
+      lng: -68.12,
+      direccion: 'Parque Laikakota, La Paz',
+    },
+    habilidades: [
+      'trabajo en equipo',
+      'educación ambiental',
+      'resistencia física',
+    ],
     status: 'open',
     created_by: 'aaaaaaaa-0000-0000-0000-000000000001',
   },
@@ -165,7 +218,11 @@ const OPORTUNIDADES = [
     deadline: daysFromNow(90),
     cupos: 2,
     cupos_disponibles: 2,
-    ubicacion: { lat: -17.3935, lng: -66.1568, direccion: 'Campus UPB Cochabamba' },
+    ubicacion: {
+      lat: -17.3935,
+      lng: -66.1568,
+      direccion: 'Campus UPB Cochabamba',
+    },
     habilidades: ['historia', 'oratoria', 'atención al público'],
     status: 'open',
     created_by: 'aaaaaaaa-0000-0000-0000-000000000001',
@@ -191,7 +248,12 @@ const OPORTUNIDADES = [
       lng: -68.13,
       direccion: 'Sede Central Ministerio de Salud, La Paz',
     },
-    habilidades: ['primeros auxilios', 'trabajo en equipo', 'resistencia física', 'empatía'],
+    habilidades: [
+      'primeros auxilios',
+      'trabajo en equipo',
+      'resistencia física',
+      'empatía',
+    ],
     status: 'open',
     created_by: 'bbbbbbbb-0000-0000-0000-000000000002',
   },
@@ -256,10 +318,10 @@ async function seedAuthAndProfiles() {
     // across runs — FK references in oportunidades/postulaciones always match.
     const { data, error } = await supabase.auth.admin.createUser({
       // `id` is a valid field in Supabase JS v2 admin API
-      ...(({ id: u.id }) as any),
+      ...({ id: u.id } as any),
       id: u.id,
       email: u.email,
-      password: u.password,
+      password: u.password.value,
       email_confirm: true, // skip email verification for dev seeds
       user_metadata: { full_name: u.nombre },
     });
@@ -273,6 +335,24 @@ async function seedAuthAndProfiles() {
 
       if (isDupe) {
         console.log(`  ↺  ${u.email}  (auth user exists — skipping create)`);
+        // Re-running the seed with a configured password rotates it (e.g.
+        // after the old demo password was published). Random passwords are
+        // never applied to existing users, so nobody gets locked out.
+        if (u.password.fromEnv) {
+          const { error: pwError } = await supabase.auth.admin.updateUserById(
+            u.id,
+            { password: u.password.value },
+          );
+          if (pwError) {
+            console.error(
+              `  ✗  ${u.email}: password reset failed: ${pwError.message}`,
+            );
+          } else {
+            console.log(
+              `  ✓  ${u.email}: password reset to the configured value`,
+            );
+          }
+        }
       } else {
         console.error(`  ✗  ${u.email}: ${error.message}`);
         continue;
@@ -345,10 +425,15 @@ async function main() {
   await seedAuthAndProfiles();
   await seedOportunidades();
   await seedPostulaciones();
-  console.log('\n✅  Done! Credentials (all use Password123!):');
-  console.log('  admin@upb.edu.bo');
-  console.log('  organizador@upb.edu.bo');
-  console.log('  estudiante@upb.edu.bo');
+  // Never print passwords: GitHub Actions logs of a public repo are public.
+  console.log('\n✅  Done! Demo accounts:');
+  console.log('  estudiante@upb.edu.bo   (SEED_STUDENT_PASSWORD, public demo)');
+  console.log(
+    `  organizador@upb.edu.bo  (${ORGANIZER_PASSWORD.fromEnv ? 'SEED_ORGANIZER_PASSWORD' : 'random password, reset it in Supabase'})`,
+  );
+  console.log(
+    `  admin@upb.edu.bo        (${ADMIN_PASSWORD.fromEnv ? 'SEED_ADMIN_PASSWORD' : 'random password, reset it in Supabase'})`,
+  );
 }
 
 main().catch((e) => {

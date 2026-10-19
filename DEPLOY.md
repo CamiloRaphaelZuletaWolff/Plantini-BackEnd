@@ -144,6 +144,30 @@ salta a [2.4](#24-copia-la-url-y-las-claves) para copiar las claves y luego haz 
 5. Debe terminar con *Success. No rows returned*.
 6. Comprueba en **Table Editor** que existen `users`, `oportunidades`, `postulaciones` y `chat_histories`.
 
+#### 2.2.1 ¿Ya tenías la base creada con una versión anterior? → `sql/security-fixes.sql`
+
+Si tu proyecto de Supabase se creó con un `schema.sql` **anterior** a las correcciones de seguridad
+(y ya tiene datos que no quieres perder), **no** vuelvas a ejecutar `schema.sql`. Ejecuta en su lugar
+la migración **no destructiva** `sql/security-fixes.sql`:
+
+1. **SQL Editor** → **+ New query**.
+2. Copia **todo** `sql/security-fixes.sql` y pégalo → **Run**.
+3. Debe terminar con *Success. No rows returned*. Es idempotente (puedes ejecutarla otra vez) y corre
+   en una transacción: o se aplica todo o nada. **No borra tablas ni datos**; solo reemplaza políticas
+   RLS, la configuración de los buckets, tres funciones y un permiso de columna.
+
+Qué corrige (resumen):
+
+| Antes | Ahora |
+|---|---|
+| Un estudiante podía crear su postulación ya `accepted`/`confirmado`. | Toda postulación nueva nace `submitted` y sin confirmar. |
+| Cualquier organizer veía y modificaba **todas** las postulaciones (emails, teléfonos) y cualquier columna. | Solo las de **sus** oportunidades, y solo `estado`/`confirmado`. |
+| Los organizers leían todos los perfiles (`users`: email, teléfono, push tokens). | Solo el admin lee perfiles ajenos. |
+| Un organizer podía crear oportunidades con `created_by` de otra persona. | `created_by` debe ser el propio usuario. |
+| Cualquiera (incluso sin sesión) podía **listar** todos los archivos de los buckets; cualquier organizer podía borrar/sobrescribir portadas ajenas; sin límite de tamaño ni de tipo (SVG). | Sin listado público; cada uno gestiona su carpeta `<userId>/…`; 10 MB máx.; solo JPEG/PNG/WebP/GIF/HEIC. |
+| El cliente podía escribir `chat_histories` directamente con la anon key. | Solo el backend escribe; el cliente solo lee/borra lo suyo. |
+| Se podía postular a oportunidades `closed`/`finished`. | Rechazado por el trigger de cupos. |
+
 ### 2.3 Buckets de Storage
 
 El mismo `schema.sql` crea los tres buckets **públicos** con sus políticas:
@@ -151,10 +175,12 @@ El mismo `schema.sql` crea los tres buckets **públicos** con sus políticas:
 | Bucket | Uso |
 |---|---|
 | `profile-images` | Avatares y fondos de perfil (cada usuario solo escribe en su carpeta). |
-| `oportunidad-covers` | Portadas de oportunidades (solo admin/organizer escriben). |
-| `ai-images` | Imágenes generadas por el backend. |
+| `oportunidad-covers` | Portadas de oportunidades (admin/organizer, cada uno en su carpeta). |
+| `ai-images` | Imágenes generadas por el backend (solo el backend escribe). |
 
 Compruébalo en **Storage** (menú izquierdo): deben aparecer los tres. No hay que crear nada a mano.
+Los archivos se sirven por su URL pública, pero **no** se pueden listar sin sesión; cada bucket limita
+el tamaño (10 MB) y el tipo (solo imágenes, sin SVG).
 
 ### 2.4 Copia la URL y las claves
 
@@ -220,9 +246,18 @@ Supabase solo redirige (confirmación de correo, recuperación de contraseña, O
 
 | Email | Contraseña | Rol |
 |---|---|---|
-| `admin@upb.edu.bo` | `Password123!` | admin |
-| `organizador@upb.edu.bo` | `Password123!` | organizer |
-| `estudiante@upb.edu.bo` | `Password123!` | estudiante |
+| `estudiante@upb.edu.bo` | `SEED_STUDENT_PASSWORD` (por defecto `Password123!`) | estudiante — **cuenta demo pública** |
+| `organizador@upb.edu.bo` | `SEED_ORGANIZER_PASSWORD` (secreta) | organizer |
+| `admin@upb.edu.bo` | `SEED_ADMIN_PASSWORD` (secreta) | admin |
+
+> 🔒 **Nunca publiques** las contraseñas del admin ni del organizer (README, LinkedIn, portfolio…):
+> el repo es público y un admin puede borrar oportunidades y cambiar roles. Para reclutadores comparte
+> solo la cuenta **estudiante**, que RLS limita a sus propios datos. Si no defines
+> `SEED_ADMIN_PASSWORD` / `SEED_ORGANIZER_PASSWORD`, el seed les pone una contraseña **aleatoria que no
+> se imprime** (puedes cambiarla en **Authentication → Users → … → Reset password** o volviendo a
+> correr el seed con el secret definido). Si las defines (mínimo 12 caracteres), cada ejecución del
+> seed **restablece** esa contraseña: así rotas una contraseña filtrada. El seed nunca imprime
+> contraseñas (los logs de Actions de un repo público son públicos).
 
 > Requisito: haber ejecutado `sql/schema.sql` (paso 2.2). El seed vuelve a escribir las filas demo
 > (upsert) pero **no** borra otras filas.
@@ -236,6 +271,9 @@ Render Free no tiene consola, así que las operaciones puntuales se hacen desde 
    - *Name:* `SUPABASE_URL` · *Secret:* la Project URL del paso 2.4 → **Add secret**.
 3. **New repository secret** otra vez:
    - *Name:* `SUPABASE_SERVICE_ROLE_KEY` · *Secret:* la service_role key → **Add secret**.
+   - Y, del mismo modo, `SEED_ADMIN_PASSWORD` y `SEED_ORGANIZER_PASSWORD` (contraseñas largas
+     generadas por tu gestor de contraseñas, ≥ 12 caracteres). Opcional: `SEED_STUDENT_PASSWORD`
+     para la cuenta demo pública.
 4. Ve a la pestaña **Actions** del repo. Si es la primera vez, clic en
    **I understand my workflows, go ahead and enable them**.
 5. En la lista de la izquierda elige **Seed Supabase (manual)** → botón **Run workflow** (a la derecha).
@@ -253,6 +291,8 @@ npm ci
 # Crea gemini-backend/.env (NO se commitea) con al menos:
 #   SUPABASE_URL=https://<ref>.supabase.co
 #   SUPABASE_SERVICE_ROLE_KEY=<service_role>
+#   SEED_ADMIN_PASSWORD=<larga y secreta>
+#   SEED_ORGANIZER_PASSWORD=<larga y secreta>
 npm run seed
 ```
 
@@ -278,6 +318,8 @@ npm run seed
 | `CORS_ORIGINS` | Por ahora `http://localhost:4000`. **La cambiarás en el paso 6.5** por la URL de Vercel. |
 
    `NODE_VERSION=22` y `NODE_ENV=production` ya vienen en el archivo. `PORT` lo pone Render solo.
+   `ENABLE_IMAGE_GENERATION` es opcional y está **desactivada** (no la definas): habilita
+   `POST /api/gemini/image-generation`, el endpoint más caro, que la app no usa.
 6. Clic en **Apply** (o *Deploy Blueprint*).
 7. Ve a **Dashboard → plantini-backend → Events / Logs**. El primer build tarda 3–6 min:
    `npm ci --include=dev && npm run build` y luego `npm run start:prod`.
@@ -445,7 +487,10 @@ Hazlo en una ventana de incógnito, como lo vería un reclutador:
 - [ ] **Chatbot Plantini** (menú lateral → Chat): envía "Hola". Si Render dormía, aparece
       *"Despertando el servidor gratuito, ~1 min…"*; luego la respuesta llega **en streaming** (se va escribiendo).
 - [ ] Un segundo mensaje responde rápido (el servidor ya está despierto) y recuerda el contexto.
-- [ ] Login como `admin@upb.edu.bo` muestra las pantallas de administración.
+- [ ] Login como `admin@upb.edu.bo` (con tu `SEED_ADMIN_PASSWORD`) muestra las pantallas de administración.
+- [ ] Seguridad: con la cuenta estudiante, el cambio de rol o la edición de oportunidades ajenas no tiene
+      efecto, y `https://<vercel>/` responde con las cabeceras `X-Frame-Options`, `X-Content-Type-Options`
+      y `Content-Security-Policy` (pestaña *Network* del navegador).
 - [ ] Los badges de CI de ambos repos están en verde.
 
 ---

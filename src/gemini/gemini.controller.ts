@@ -8,6 +8,7 @@ import {
   InternalServerErrorException,
   Logger,
   Param,
+  ParseUUIDPipe,
   Post,
   Req,
   Res,
@@ -16,6 +17,7 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { FilesInterceptor } from '@nestjs/platform-express';
+import { Throttle } from '@nestjs/throttler';
 
 import { Request, Response } from 'express';
 import type { User } from '@supabase/supabase-js';
@@ -163,7 +165,7 @@ export class GeminiController {
 
   @Get('chat-history/:chatId')
   async getChatHistory(
-    @Param('chatId') chatId: string,
+    @Param('chatId', new ParseUUIDPipe()) chatId: string,
     @Req() request: AuthenticatedRequest,
   ) {
     // findByChatId filters by (chat_id, user_id) — returns [] for chats not
@@ -181,7 +183,7 @@ export class GeminiController {
 
   @Delete('chat-history/:chatId')
   async clearChatHistory(
-    @Param('chatId') chatId: string,
+    @Param('chatId', new ParseUUIDPipe()) chatId: string,
     @Req() request: AuthenticatedRequest,
   ) {
     try {
@@ -192,6 +194,8 @@ export class GeminiController {
     }
   }
 
+  // Much tighter limit than the global 20/min: each call generates an image.
+  @Throttle({ default: { limit: 3, ttl: 60_000 } })
   @Post('image-generation')
   @UseInterceptors(FilesInterceptor('files', MAX_UPLOAD_FILES, uploadOptions))
   async imageGeneration(
@@ -233,13 +237,19 @@ export class GeminiController {
     }
 
     if (!res.headersSent) {
-      const status =
-        error instanceof HttpException
-          ? error.getStatus()
-          : HttpStatus.INTERNAL_SERVER_ERROR;
-      res.status(status).json({
+      // Only our own HttpExceptions carry client-safe messages. Anything
+      // else (Gemini SDK, Supabase, network) may include internal details,
+      // so the client gets the generic message and the details stay in logs.
+      if (error instanceof HttpException) {
+        res.status(error.getStatus()).json({
+          statusCode: error.getStatus(),
+          message: error.message,
+        });
+        return;
+      }
+      res.status(HttpStatus.INTERNAL_SERVER_ERROR).json({
+        statusCode: HttpStatus.INTERNAL_SERVER_ERROR,
         message,
-        error: error instanceof Error ? error.message : String(error),
       });
       return;
     }

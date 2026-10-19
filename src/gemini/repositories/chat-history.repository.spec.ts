@@ -1,3 +1,5 @@
+import { ForbiddenException } from '@nestjs/common';
+
 import { ChatHistoryRepository } from './chat-history.repository';
 import { SupabaseService } from '../../supabase/supabase.service';
 
@@ -126,6 +128,87 @@ describe('ChatHistoryRepository', () => {
         ['chat_id', CHAT_ID],
         ['user_id', USER_A],
       ]);
+    });
+  });
+
+  describe('save', () => {
+    /**
+     * Mock for `update().eq().eq().select()` followed by `insert()`.
+     * `updateResult` resolves the UPDATE (rows touched), `insertResult`
+     * resolves the INSERT.
+     */
+    const buildSaveSupabase = (
+      updateResult: { data: unknown; error: unknown },
+      insertResult: { error: unknown },
+    ) => {
+      const eqCalls: Array<[string, unknown]> = [];
+      const updateChain = {
+        eq: jest.fn().mockImplementation((col: string, val: unknown) => {
+          eqCalls.push([col, val]);
+          return updateChain;
+        }),
+        select: jest.fn().mockResolvedValue(updateResult),
+      };
+      const builder = {
+        update: jest.fn().mockReturnValue(updateChain),
+        insert: jest.fn().mockResolvedValue(insertResult),
+        upsert: jest.fn(),
+      };
+      const client = { from: jest.fn().mockReturnValue(builder) };
+      return {
+        service: { client } as unknown as SupabaseService,
+        builder,
+        eqCalls,
+      };
+    };
+
+    const MESSAGES = [{ role: 'user' as const, parts: [{ text: 'hola' }] }];
+
+    it('updates only the row owned by the caller and never upserts', async () => {
+      const { service, builder, eqCalls } = buildSaveSupabase(
+        { data: [{ chat_id: CHAT_ID }], error: null },
+        { error: null },
+      );
+      const repo = new ChatHistoryRepository(service);
+
+      await repo.save(CHAT_ID, USER_A, MESSAGES);
+
+      expect(eqCalls).toEqual([
+        ['chat_id', CHAT_ID],
+        ['user_id', USER_A],
+      ]);
+      expect(builder.insert).not.toHaveBeenCalled();
+      expect(builder.upsert).not.toHaveBeenCalled();
+    });
+
+    it('inserts a new row when the caller has no row for that chat yet', async () => {
+      const { service, builder } = buildSaveSupabase(
+        { data: [], error: null },
+        { error: null },
+      );
+      const repo = new ChatHistoryRepository(service);
+
+      await repo.save(CHAT_ID, USER_A, MESSAGES);
+
+      expect(builder.insert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          chat_id: CHAT_ID,
+          user_id: USER_A,
+          messages: MESSAGES,
+        }),
+      );
+    });
+
+    it('throws ForbiddenException when the chat_id already belongs to another user', async () => {
+      const { service } = buildSaveSupabase(
+        { data: [], error: null },
+        { error: { message: 'duplicate key', code: '23505' } },
+      );
+      const repo = new ChatHistoryRepository(service);
+
+      await expect(repo.save(CHAT_ID, USER_A, MESSAGES)).rejects.toBeInstanceOf(
+        ForbiddenException,
+      );
     });
   });
 });

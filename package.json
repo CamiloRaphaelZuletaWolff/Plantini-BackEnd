@@ -35,9 +35,10 @@
     "@supabase/supabase-js": "^2.103.0",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.1",
+    "helmet": "^8.3.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
-    "sharp": "^0.34.1",
+    "sharp": "^0.35.5",
     "uuid": "^11.1.0"
   },
   "devDependencies": {

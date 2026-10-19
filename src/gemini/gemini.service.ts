@@ -13,6 +13,12 @@ import { imageGenerationUseCase } from './use-cases/image-generation.use-case';
 import { ChatHistoryRepository } from './repositories/chat-history.repository';
 import { SupabaseService } from '../supabase/supabase.service';
 
+/**
+ * Upper bound of messages kept per chat. Every request replays the stored
+ * history to Gemini, so an unbounded history means unbounded token cost.
+ */
+export const MAX_STORED_MESSAGES = 100;
+
 @Injectable()
 export class GeminiService {
   private readonly ai: GoogleGenAI;
@@ -105,10 +111,11 @@ export class GeminiService {
         chatId,
         userId,
       );
-      await this.chatHistoryRepository.save(chatId, userId, [
-        ...history,
-        ...newMessages,
-      ]);
+      await this.chatHistoryRepository.save(
+        chatId,
+        userId,
+        [...history, ...newMessages].slice(-MAX_STORED_MESSAGES),
+      );
     } catch (error) {
       // Re-throw authorization errors so the caller surfaces a 403.
       if (error instanceof ForbiddenException) throw error;
@@ -137,6 +144,14 @@ export class GeminiService {
   }
 
   async imageGeneration(imageGenerationDto: ImageGenerationDto) {
+    // Image generation is the most expensive call and the app does not use
+    // it, so it is opt-in: set ENABLE_IMAGE_GENERATION=true to turn it on.
+    if (this.configService.get<string>('ENABLE_IMAGE_GENERATION') !== 'true') {
+      throw new ForbiddenException(
+        'La generación de imágenes está deshabilitada',
+      );
+    }
+
     try {
       return await imageGenerationUseCase(this.ai, imageGenerationDto, {
         supabase: this.supabaseService.client,

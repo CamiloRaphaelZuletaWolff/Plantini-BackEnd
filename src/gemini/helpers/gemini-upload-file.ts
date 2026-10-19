@@ -7,19 +7,26 @@ import sharp from 'sharp';
 
 import { MAX_UPLOAD_FILE_BYTES } from './upload-limits';
 
+/**
+ * The only file types the chat accepts: common raster images and PDF.
+ * SVG and Office documents are rejected on purpose (SVG can carry scripts
+ * and is parsed by librsvg inside sharp; Office files are not needed).
+ */
 const fileMimeTypesByExtension: Record<string, string> = {
-  jpg: 'image/jpg',
+  jpg: 'image/jpeg',
   jpeg: 'image/jpeg',
   png: 'image/png',
   gif: 'image/gif',
-  svg: 'image/svg+xml',
+  webp: 'image/webp',
+  heic: 'image/heic',
+  heif: 'image/heif',
   pdf: 'application/pdf',
-  doc: 'application/msword',
-  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  xls: 'application/vnd.ms-excel',
-  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  ppt: 'application/vnd.ms-powerpoint',
-  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+};
+
+/** Non-standard aliases some clients send, mapped to the canonical type. */
+const mimeTypeAliases: Record<string, string> = {
+  'image/jpg': 'image/jpeg',
+  'image/pjpeg': 'image/jpeg',
 };
 
 interface UploadFileOptions {
@@ -32,29 +39,62 @@ const DEFAULT_MAX_FILE_SIZE_BYTES = MAX_UPLOAD_FILE_BYTES;
 const allowedMimeTypes = new Set(Object.values(fileMimeTypesByExtension));
 const logger = new Logger('GeminiUploadFile');
 
+const startsWithBytes = (buffer: Buffer, bytes: number[], offset = 0) =>
+  buffer.length >= offset + bytes.length &&
+  bytes.every((byte, index) => buffer[offset + index] === byte);
+
+const ascii = (text: string) => [...text].map((char) => char.charCodeAt(0));
+
+/**
+ * Detects the real type from the file's first bytes ("magic numbers").
+ * The client-provided mimetype and extension are trivially spoofable, so the
+ * content must match an allowed signature too.
+ */
+export const sniffMimeType = (buffer: Buffer | undefined): string | null => {
+  if (!buffer || buffer.length < 4) return null;
+  if (startsWithBytes(buffer, [0xff, 0xd8, 0xff])) return 'image/jpeg';
+  if (startsWithBytes(buffer, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+    return 'image/png';
+  if (startsWithBytes(buffer, ascii('GIF8'))) return 'image/gif';
+  if (
+    startsWithBytes(buffer, ascii('RIFF')) &&
+    startsWithBytes(buffer, ascii('WEBP'), 8)
+  )
+    return 'image/webp';
+  if (startsWithBytes(buffer, ascii('%PDF-'))) return 'application/pdf';
+  if (startsWithBytes(buffer, ascii('ftyp'), 4)) {
+    const brand = buffer.subarray(8, 12).toString('ascii');
+    if (['heic', 'heix', 'heim', 'heis', 'hevc', 'hevx'].includes(brand))
+      return 'image/heic';
+    if (['mif1', 'msf1', 'heif'].includes(brand)) return 'image/heif';
+  }
+  return null;
+};
+
 const resolveMimeType = (file: Express.Multer.File) => {
   const fileExtension = file.originalname.split('.').pop() ?? '';
   const fallbackMimeType =
     fileMimeTypesByExtension[fileExtension.toLowerCase()] ?? '';
-  const providedMimeType = file.mimetype;
+  const providedMimeType = (file.mimetype ?? '').toLowerCase();
 
   if (
     providedMimeType &&
     !providedMimeType.includes('application/octet-stream')
   ) {
-    return providedMimeType;
+    return mimeTypeAliases[providedMimeType] ?? providedMimeType;
   }
 
-  if (fallbackMimeType) {
-    return fallbackMimeType;
-  }
-
-  return providedMimeType;
+  return fallbackMimeType || providedMimeType;
 };
 
-const ensureFileIsAllowed = (
+const isSameFamily = (declared: string, sniffed: string) =>
+  declared === sniffed ||
+  // HEIC/HEIF brands overlap; treat them as one family.
+  (declared.startsWith('image/hei') && sniffed.startsWith('image/hei'));
+
+export const ensureFileIsAllowed = (
   file: Express.Multer.File,
-  maxFileSizeBytes: number,
+  maxFileSizeBytes: number = DEFAULT_MAX_FILE_SIZE_BYTES,
 ) => {
   if (file.size > maxFileSizeBytes) {
     throw new BadRequestException(
@@ -63,10 +103,13 @@ const ensureFileIsAllowed = (
   }
 
   const mimeType = resolveMimeType(file);
+  const sniffedMimeType = sniffMimeType(file.buffer);
 
   if (
     !mimeType ||
-    (!mimeType.startsWith('image/') && !allowedMimeTypes.has(mimeType))
+    !allowedMimeTypes.has(mimeType) ||
+    !sniffedMimeType ||
+    !isSameFamily(mimeType, sniffedMimeType)
   ) {
     throw new BadRequestException('Tipo de archivo no soportado');
   }
@@ -101,7 +144,7 @@ export const geminiUploadFiles = async (
           });
         } catch {
           logger.warn(
-            `No se pudo procesar el archivo para transformarlo a PNG: ${file.originalname}`,
+            `No se pudo transformar a PNG un archivo de ${file.size} bytes`,
           );
           throw new BadRequestException(
             'No se pudo procesar la imagen, verifica que el archivo sea válido',

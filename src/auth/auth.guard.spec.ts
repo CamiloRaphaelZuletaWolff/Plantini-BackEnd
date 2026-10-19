@@ -4,10 +4,6 @@ import type { ExecutionContext } from '@nestjs/common';
 import { AuthGuard } from './auth.guard';
 import { SupabaseService } from '../supabase/supabase.service';
 
-type GetUserResult = Awaited<
-  ReturnType<SupabaseService['client']['auth']['getUser']>
->;
-
 const makeContext = (authHeader?: string): ExecutionContext =>
   ({
     switchToHttp: () => ({
@@ -45,7 +41,7 @@ describe('AuthGuard', () => {
     const getUser = jest.fn().mockResolvedValue({
       data: { user: null },
       error: { message: 'JWT expired' },
-    } as unknown as GetUserResult);
+    });
     const guard = new AuthGuard(makeSupabase(getUser));
 
     await expect(
@@ -59,7 +55,7 @@ describe('AuthGuard', () => {
     const getUser = jest.fn().mockResolvedValue({
       data: { user: fakeUser },
       error: null,
-    } as unknown as GetUserResult);
+    });
 
     const request: { headers: { authorization: string }; user?: unknown } = {
       headers: { authorization: 'Bearer good-token' },

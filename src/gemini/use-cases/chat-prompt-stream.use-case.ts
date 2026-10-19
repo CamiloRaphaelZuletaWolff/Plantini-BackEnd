@@ -35,6 +35,13 @@ const DEFAULT_SYSTEM_INSTRUCTION = `
   - Sé conciso y útil.
 `;
 
+/**
+ * Only the most recent turns are replayed to the model. Keeps the token cost
+ * of a long conversation bounded (history is stored in user/model pairs, so
+ * an even number keeps the turns aligned).
+ */
+const MAX_HISTORY_MESSAGES = 40;
+
 const logger = new Logger('ChatPromptStreamUseCase');
 
 export const chatPromptStreamUseCase = async (
@@ -54,15 +61,17 @@ export const chatPromptStreamUseCase = async (
   // Defensive: drop any history entry with no usable text. A prior failed
   // stream may have persisted `{ role: 'model', parts: [{ text: '' }] }` —
   // sending empty turns makes the model reject the request.
-  const sanitizedHistory = history.filter((turn) =>
-    turn.parts?.some(
-      (part) => typeof part.text === 'string' && part.text.trim().length > 0,
-    ),
-  );
+  const sanitizedHistory = history
+    .filter((turn) =>
+      turn.parts?.some(
+        (part) => typeof part.text === 'string' && part.text.trim().length > 0,
+      ),
+    )
+    .slice(-MAX_HISTORY_MESSAGES);
 
   if (sanitizedHistory.length !== history.length) {
     logger.warn(
-      `Filtered ${history.length - sanitizedHistory.length} empty turn(s) ` +
+      `Dropped ${history.length - sanitizedHistory.length} empty/old turn(s) ` +
         `from chat history before sending to Gemini`,
     );
   }
@@ -71,7 +80,7 @@ export const chatPromptStreamUseCase = async (
 
   logger.log(
     `Gemini interaction: model=${model} historyTurns=${sanitizedHistory.length} ` +
-      `uploadedFiles=${uploadedFiles.length} promptPreview="${prompt.slice(0, 80)}"`,
+      `uploadedFiles=${uploadedFiles.length} promptLen=${prompt.length}`,
   );
 
   try {

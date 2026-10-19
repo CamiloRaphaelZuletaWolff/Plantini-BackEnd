@@ -2,6 +2,7 @@ import { ValidationPipe, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
+import helmet from 'helmet';
 
 import { AppModule } from './app.module';
 
@@ -16,6 +17,22 @@ async function bootstrap() {
   // instead of lumping every request under the proxy's address.
   app.set('trust proxy', 1);
 
+  // Security headers (HSTS, X-Content-Type-Options: nosniff, frame-ancestors
+  // 'none', no X-Powered-By, ...). This is a JSON/text API, so the default
+  // CSP is fine. CORP is relaxed to `cross-origin` because the web app
+  // (Vercel) and the API (Render) live on different sites; access is still
+  // controlled by CORS below.
+  app.use(
+    helmet({
+      crossOriginResourcePolicy: { policy: 'cross-origin' },
+    }),
+  );
+
+  // Explicit body limits. Every Gemini route is multipart (limits set in
+  // helpers/upload-limits.ts); JSON/urlencoded bodies are never large here.
+  app.useBodyParser('json', { limit: '100kb' });
+  app.useBodyParser('urlencoded', { limit: '100kb', extended: false });
+
   const logger = new Logger('Bootstrap');
   const configService = app.get(ConfigService);
 
@@ -26,9 +43,11 @@ async function bootstrap() {
       .map((origin) => origin.trim())
       .filter(Boolean);
 
+    // The frontend authenticates with an `Authorization: Bearer` header,
+    // never cookies, so credentialed CORS is not needed (and stays off).
     app.enableCors({
       origin: origins,
-      credentials: true,
+      credentials: false,
     });
   } else {
     // Default to localhost-only origins when CORS_ORIGINS is not configured.
@@ -40,10 +59,11 @@ async function bootstrap() {
     app.enableCors({
       origin: [
         'http://localhost:3000',
+        'http://localhost:4000',
         'http://localhost:8081',
         'http://localhost:19006',
       ],
-      credentials: true,
+      credentials: false,
     });
   }
 

@@ -30,6 +30,12 @@ class EnvironmentVariables {
   @IsOptional()
   @IsString()
   PORT?: string;
+
+  // "true" enables POST /api/gemini/image-generation (disabled by default:
+  // it is the most expensive endpoint and the app does not use it).
+  @IsOptional()
+  @IsString()
+  ENABLE_IMAGE_GENERATION?: string;
 }
 
 export const validateEnv = (config: Record<string, unknown>) => {
